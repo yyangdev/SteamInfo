@@ -191,8 +191,6 @@ async def steam_level_handler(message: types.Message):
 На максимальном уровне вы получите 500 опыта.
 
 <code>ДЕШЕВЫЕ КАРТОЧКИ</code>
-
-<code>🎯 СПИСОК КАРТОЧЕК:</code>
 • https://s.team/m/753/?q=Murderous+Pursuits
 • https://s.team/m/753/?q=Evolvation
 • https://s.team/m/753/?q=World+of+Warships

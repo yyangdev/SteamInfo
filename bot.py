@@ -1,13 +1,12 @@
 import asyncio
 import random
-import re
 import requests
 import aiosqlite
-import xml.etree.ElementTree as ET
 from bs4 import BeautifulSoup
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, FSInputFile
+from aiogram.enums import ParseMode
 
 TOKEN = "8485275877:AAHhcEyFnivmc_b2cyHiTtsmAY_aCr6kUJg"
 
@@ -17,24 +16,24 @@ dp = Dispatcher()
 class Data:
     def __init__(self):
         self.db_name = "users.db"
-        
+    
     async def initdb(self):
         async with aiosqlite.connect(self.db_name) as db:
             await db.execute('''
-                CREATE TABLE IF NOT EXISTS users (
-                    user_id INTEGER PRIMARY KEY,
-                    username TEXT,
-                    first_name TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
+            CREATE TABLE IF NOT EXISTS users (
+            user_id INTEGER PRIMARY KEY,
+            username TEXT,
+            first_name TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
             ''')
             await db.commit()
-            
+    
     async def add_user(self, user_id, username, first_name):
         async with aiosqlite.connect(self.db_name) as db:
             await db.execute(
-                '''INSERT OR IGNORE INTO users (user_id, username, first_name) 
-                   VALUES (?, ?, ?)''',
+                '''INSERT OR IGNORE INTO users (user_id, username, first_name)
+                VALUES (?, ?, ?)''',
                 (user_id, username, first_name)
             )
             await db.commit()
@@ -73,69 +72,97 @@ async def get_top_online_games():
     soup = BeautifulSoup(response.text, 'html.parser')
     
     table = soup.find('table', id='top-games')
-    rows = table.find('tbody').find_all('tr')[:10]
+    if not table:
+        return "Не удалось получить данные о топе игр"
+    
+    tbody = table.find('tbody')
+    if not tbody:
+        return "Не удалось получить данные о топе игр"
+    
+    rows = tbody.find_all('tr')[:10]
     top_list = ["🏆 <b>Топ игр по онлайну прямо сейчас</b>"]
     
     for idx, row in enumerate(rows, 1):
         name_cell = row.find('td', class_='game-name')
-        name = name_cell.find('a').text.strip()
+        if name_cell:
+            name_link = name_cell.find('a')
+            name = name_link.text.strip() if name_link else "Неизвестно"
+        else:
+            name = "Неизвестно"
         
         players_cell = row.find('td', class_='num')
-        players = players_cell.text.strip()
+        players = players_cell.text.strip() if players_cell else "0"
         
         top_list.append(f"{idx}. <b>{name}</b> — {players} игроков")
-    
     return "\n".join(top_list)
 
 async def get_game_price(game_name):
-    search = requests.get(
-        "https://store.steampowered.com/api/storesearch",
-        params={'term': game_name, 'cc': 'ru'}
-    ).json()
-    
-    if not search.get('items'): 
-        return "Игра не найдена"
-    
-    game = search['items'][0]
-    game_id = game['id']
-    result = []
-    
-    for cc, symbol in [('ru', '₽'), ('us', '$'), ('kz', '₸')]:
-        details = requests.get(
-            "https://store.steampowered.com/api/appdetails",
-            params={'appids': game_id, 'cc': cc}
+    try:
+        search = requests.get(
+            "https://store.steampowered.com/api/storesearch",
+            params={'term': game_name, 'cc': 'ru'},
+            timeout=10
         ).json()
         
-        if details.get(str(game_id), {}).get('success'):
-            data = details[str(game_id)]['data']
-            if data.get('is_free'):
-                price = "Игра бесплатная"
-            elif data.get('price_overview'):
-                p = data['price_overview']
-                price = f"{p['final_formatted']}"
-                if p['discount_percent'] > 0:
-                    price += f" (-{p['discount_percent']}%)"
+        if not search.get('items'):
+            return "Игра не найдена"
+        
+        game = search['items'][0]
+        game_id = game['id']
+        game_name_display = game.get('name', 'Неизвестно')
+        result = []
+        
+        for cc, symbol in [('ru', '₽'), ('us', '$'), ('kz', '₸')]:
+            details = requests.get(
+                "https://store.steampowered.com/api/appdetails",
+                params={'appids': game_id, 'cc': cc, 'l': 'russian'},
+                timeout=10
+            ).json()
+            
+            if details.get(str(game_id), {}).get('success'):
+                data = details[str(game_id)]['data']
+                if data.get('is_free'):
+                    price = "Игра бесплатная"
+                elif data.get('price_overview'):
+                    p = data['price_overview']
+                    price = f"{p['final_formatted']}"
+                    if p['discount_percent'] > 0:
+                        price += f" (-{p['discount_percent']}%)"
+                else:
+                    price = "Цена не указана"
+                result.append(f"{symbol} {price}")
             else:
-                price = "—"
-            result.append(f"{symbol} {price}")
-    
-    return f"🎮 {game['name']}\n\n" + "\n".join(result)
+                result.append(f"{symbol} Недоступно")
+        
+        if not result:
+            return f"🎮 {game_name_display}\n\nЦены не найдены"
+        
+        return f"🎮 <b>{game_name_display}</b>\n\n" + "\n".join(result)
+    except Exception as e:
+        return f"Произошла ошибка при поиске игры: {str(e)}"
 
 @dp.message(Command("start"))
 async def start_handler(message: types.Message):
     await db.add_user(
         message.from_user.id,
         message.from_user.username or "",
-        message.from_user.first_name
+        message.from_user.first_name or ""
     )
     
-    photo = FSInputFile("bot_photo.png")
-    await message.answer_photo(
-        photo=photo,
-        caption="<b>🎮 Бот для поиска цен игр, гайдов Steam и т.п</b>\n<i>Разработка ботов под ваши цели -- @yangspays</i>",
-        parse_mode='HTML',
-        reply_markup=main_keyboard
-    )
+    try:
+        photo = FSInputFile("bot_photo.png")
+        await message.answer_photo(
+            photo=photo,
+            caption="<b>🎮 Бот для поиска цен игр, гайдов Steam и т.п</b>\n<i>Разработка ботов под ваши цели -- @yangspays</i>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=main_keyboard
+        )
+    except:
+        await message.answer(
+            "<b>🎮 Бот для поиска цен игр, гайдов Steam и т.п</b>\n<i>Разработка ботов под ваши цели -- @yangspays</i>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=main_keyboard
+        )
 
 @dp.message(lambda message: message.text == "Цена игры по ее названию")
 async def ask_game_handler(message: types.Message):
@@ -145,7 +172,7 @@ async def ask_game_handler(message: types.Message):
 async def top_online_handler(message: types.Message):
     await message.answer("📊 Загружаю актуальные данные...")
     top_list = await get_top_online_games()
-    await message.answer(top_list, parse_mode='HTML')
+    await message.answer(top_list, parse_mode=ParseMode.HTML)
 
 @dp.message(lambda message: message.text == "Гайды Steam")
 async def badges_menu_handler(message: types.Message):
@@ -153,12 +180,15 @@ async def badges_menu_handler(message: types.Message):
 
 @dp.message(lambda message: message.text == "Статистика аккаунта Steam")
 async def ask_steam_info_handler(message: types.Message):
-    await message.answer("<b>Уже совсем скоро...</b>", parse_mode='HTML')
+    await message.answer("<b>Уже совсем скоро...</b>", parse_mode=ParseMode.HTML)
 
 @dp.message(lambda message: message.text == "💎 Игры для значка Коллекционера")
 async def collector_badge_handler(message: types.Message):
-    photo = FSInputFile("yqjJ2Tf7LFI.jpg")
-    caption = '''🏆 <b>ГАЙД: Значок Коллекционер в Steam</b>
+    try:
+        photo = FSInputFile("yqjJ2Tf7LFI.jpg")
+        await message.answer_photo(
+            photo=photo,
+            caption='''🏆 <b>ГАЙД: Значок Коллекционер в Steam</b>
 
 Чтобы прокачивать данный значок вам нужно покупать игры, забирать их с распродаж
 Но в Steam множество игр при добавлении которых в библиотеку уровень значка повышается
@@ -173,14 +203,37 @@ https://s.team/a/319830 - AX:EL - Air XenoDawn
 https://s.team/a/608990 - The Archotek Project
 
 <i>На момент создания бота все игры дают +1 к значку и доступны во всех регионах СНГ</i>
-<i>Если одна из этих игр не работает или вы хотите предложить еще - напишите создателю бота (@yangspays)</i>'''
-    
-    await message.answer_photo(photo=photo, caption=caption, parse_mode='HTML')
+<i>Если одна из этих игр не работает или вы хотите предложить еще - напишите создателю бота (@yangspays)</i>''',
+            parse_mode=ParseMode.HTML
+        )
+    except:
+        await message.answer(
+            '''🏆 <b>ГАЙД: Значок Коллекционер в Steam</b>
+
+Чтобы прокачивать данный значок вам нужно покупать игры, забирать их с распродаж
+Но в Steam множество игр при добавлении которых в библиотеку уровень значка повышается
+
+<b>Вот некоторые из них</b>
+
+https://s.team/a/272060 - Serena
+https://s.team/a/8650 - RACE 07: Andy Priaulx Crowne Plaza
+https://s.team/a/346290 - Penumbra: Necrologue
+https://s.team/a/351940 - The Descendant
+https://s.team/a/319830 - AX:EL - Air XenoDawn
+https://s.team/a/608990 - The Archotek Project
+
+<i>На момент создания бота все игры дают +1 к значку и доступны во всех регионах СНГ</i>
+<i>Если одна из этих игр не работает или вы хотите предложить еще - напишите создателю бота (@yangspays)</i>''',
+            parse_mode=ParseMode.HTML
+        )
 
 @dp.message(lambda message: message.text == "💎 Cпособы повышение lvla Steam")
 async def steam_level_handler(message: types.Message):
-    photo = FSInputFile("region_change.webp")
-    caption = '''🏆 <b>ГАЙД: Прокачка LVL Steam за копейки</b>
+    try:
+        photo = FSInputFile("region_change.webp")
+        await message.answer_photo(
+            photo=photo,
+            caption='''🏆 <b>ГАЙД: Прокачка LVL Steam за копейки</b>
 
 <code>БЕСПЛАТНЫЕ СПОСОБЫ ПРОКАЧКИ</code>
 
@@ -198,36 +251,87 @@ async def steam_level_handler(message: types.Message):
 • https://s.team/m/753/?q=Counter-Strike%3A+Global+Offensive
 
 <i>На момент создания бота все карточки можно купить
-Если это не так напишите -- @yangspays</i>'''
-    
-    await message.answer_photo(photo=photo, caption=caption, parse_mode='HTML')
+Если это не так напишите -- @yangspays</i>''',
+            parse_mode=ParseMode.HTML
+        )
+    except:
+        await message.answer(
+            '''🏆 <b>ГАЙД: Прокачка LVL Steam за копейки</b>
+
+<code>БЕСПЛАТНЫЕ СПОСОБЫ ПРОКАЧКИ</code>
+
+Первый значок это Лидер сообщества который вы можете получить выполняя простые задания связанные с знакомством со Steam.
+На максимальном уровне вы получите 500 опыта.
+
+<code>СПИСОК КАРТОЧЕК:</code>
+
+• https://s.team/m/753/?q=Murderous+Pursuits
+• https://s.team/m/753/?q=Evolvation
+• https://s.team/m/753/?q=World+of+Warships
+• https://s.team/m/753/?q=Geneshift
+• https://s.team/m/753/?q=Human%3A+Fall+Flat
+• https://s.team/m/753/?q=Gorky+17
+• https://s.team/m/753/?q=Counter-Strike%3A+Global+Offensive
+
+<i>На момент создания бота все карточки можно купить
+Если это не так напишите -- @yangspays</i>''',
+            parse_mode=ParseMode.HTML
+        )
 
 @dp.message(lambda message: message.text == "💎 Смена региона Steam")
 async def region_change_handler(message: types.Message):
-    photo = FSInputFile("region_change.webp")
-    caption = '''🏆 <b>ГАЙД: Смена региона Steam</b>
+    try:
+        photo = FSInputFile("region_change.webp")
+        await message.answer_photo(
+            photo=photo,
+            caption='''🏆 <b>ГАЙД: Смена региона Steam</b>
 
 <code>Зачем это нужно?</code>
 • Обход санкций для стран СНГ
 • Доступ к заблокированным играм (GTA, CoD, RDR2 и др.)
 
 <code>Требования</code>
-1. Аккаунту > 3 месяцев
-2. С момента прошлой смены > 3 месяцев
-3. ~50-100 рублей
-4. VPN (рекомендую Казахстан)
 
+Аккаунту > 3 месяцев
+С момента прошлой смены > 3 месяцев
+~50-100 рублей
+VPN (рекомендую Казахстан)
 <code>Как сменить регион</code>
-1. Выйдите из Steam на всех устройствах
-2. Включите VPN (Казахстан)
-3. Войдите через браузер
-4. Добавьте игру в корзину
-5. Пополните кошелек через Kupikod (в тенге)
-6. Оплатите игру и подтвердите смену
 
-<i>Актуально на момент создания бота. Вопросы → @yangspays</i>'''
-    
-    await message.answer_photo(photo=photo, caption=caption, parse_mode='HTML')
+Выйдите из Steam на всех устройствах
+Включите VPN (Казахстан)
+Войдите через браузер
+Добавьте игру в корзину
+Пополните кошелек через Kupikod (в тенге)
+Оплатите игру и подтвердите смену
+<i>Актуально на момент создания бота. Вопросы → @yangspays</i>''',
+            parse_mode=ParseMode.HTML
+        )
+    except:
+        await message.answer(
+            '''🏆 <b>ГАЙД: Смена региона Steam</b>
+
+<code>Зачем это нужно?</code>
+• Обход санкций для стран СНГ
+• Доступ к заблокированным играм (GTA, CoD, RDR2 и др.)
+
+<code>Требования</code>
+
+Аккаунту > 3 месяцев
+С момента прошлой смены > 3 месяцев
+~50-100 рублей
+VPN (рекомендую Казахстан)
+<code>Как сменить регион</code>
+
+Выйдите из Steam на всех устройствах
+Включите VPN (Казахстан)
+Войдите через браузер
+Добавьте игру в корзину
+Пополните кошелек через Kupikod (в тенге)
+Оплатите игру и подтвердите смену
+<i>Актуально на момент создания бота. Вопросы → @yangspays</i>''',
+            parse_mode=ParseMode.HTML
+        )
 
 @dp.message(lambda message: message.text == "🔙 Назад в меню")
 async def back_to_main_handler(message: types.Message):
@@ -236,45 +340,47 @@ async def back_to_main_handler(message: types.Message):
 @dp.message()
 async def universal_handler(message: types.Message):
     excluded = ["Цена игры по ее названию", "Гайды Steam", "💎 Игры для значка Коллекционера",
-                "💎 Cпособы повышение lvla Steam", "💎 Смена региона Steam", "🔙 Назад в меню", 
+                "💎 Cпособы повышение lvla Steam", "💎 Смена региона Steam", "🔙 Назад в меню",
                 "Топ игр по онлайну", "Статистика аккаунта Steam"]
     
     if message.text.startswith('/') or message.text in excluded:
         return
     
     await message.answer("🔍 Идет обработка...")
-    
     price_info = await get_game_price(message.text)
-    await message.answer(price_info)
-    
+    await message.answer(price_info, parse_mode=ParseMode.HTML)
     await message.answer("Что-то еще?", reply_markup=main_keyboard)
 
-async def malling():
+async def mailing():
     while True:
-        await asyncio.sleep(300)
-        user_ids = await db.get_all_users()
-        
-        for user_id in user_ids:
-            async with aiosqlite.connect("users.db") as db_conn:
-                cursor = await db_conn.execute('SELECT first_name FROM users WHERE user_id = ?', (user_id,))
-                user_data = await cursor.fetchone()
+        await asyncio.sleep(300)  # 5 минут
+        try:
+            user_ids = await db.get_all_users()
+            
+            for user_id in user_ids:
+                async with aiosqlite.connect(db.db_name) as db_conn:
+                    cursor = await db_conn.execute('SELECT first_name FROM users WHERE user_id = ?', (user_id,))
+                    user_data = await cursor.fetchone()
                 
-            if user_data:
-                first_name = user_data[0]
-                text = [
-                    f'<b>⚡ Йоу, {first_name}! А что если твоя любимая игра подорожала? Напиши команду /start, выбери первую кнопку и проверь это!</b>',
-                    f'<b>⚡ Эй, {first_name}! А ты повысил свой лвл Steam? Если нет, то скорее пиши /start, выбирай вторую кнопку и повышай лвл!</b>',
-                    f'<b>⚡ Привет, {first_name}! Ты уже видел свежий топ по онлайну в играх? Скорее беги смотреть командой /start, выбирай третью кнопку и смотри!</b>'
-                ]
-                reminder_text = random.choice(text)
-                try:
-                    await bot.send_message(user_id, reminder_text, parse_mode="HTML")
-                except:
-                    continue
+                if user_data:
+                    first_name = user_data[0] or "друг"
+                    text = [
+                        f'<b>⚡ Йоу, {first_name}! А что если твоя любимая игра подорожала? Напиши команду /start, выбери первую кнопку и проверь это!</b>',
+                        f'<b>⚡ Эй, {first_name}! А ты повысил свой лвл Steam? Если нет, то скорее пиши /start, выбирай вторую кнопку и повышай лвл!</b>',
+                        f'<b>⚡ Привет, {first_name}! Ты уже видел свежий топ по онлайну в играх? Скорее беги смотреть командой /start, выбирай третью кнопку и смотри!</b>'
+                    ]
+                    reminder_text = random.choice(text)
+                    try:
+                        await bot.send_message(user_id, reminder_text, parse_mode=ParseMode.HTML)
+                    except:
+                        continue
+        except Exception as e:
+            print(f"Ошибка в рассылке: {e}")
+            await asyncio.sleep(60)
 
 async def main():
     await db.initdb()
-    asyncio.create_task(malling())
+    asyncio.create_task(mailing())
     await dp.start_polling(bot)
 
 if __name__ == "__main__":

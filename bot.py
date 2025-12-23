@@ -353,7 +353,7 @@ async def universal_handler(message: types.Message):
 
 async def mailing():
     while True:
-        await asyncio.sleep(300)  # 5 минут
+        await asyncio.sleep(10000)  # 5 минут
         try:
             user_ids = await db.get_all_users()
             

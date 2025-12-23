@@ -3,4 +3,3 @@ aiosqlite==0.21.0
 requests==2.28.1
 beautifulsoup4==4.14.2
 lxml==6.0.2
-aiohttp==3.12.15

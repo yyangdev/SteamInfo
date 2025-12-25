@@ -132,7 +132,7 @@ async def start_handler(message: types.Message):
     )
     
     try:
-        photo = FSInputFile("bot_photo.png")
+        photo = FSInputFile("1766692021143-019b570c-0d8c-7d0f-accb-b231d8202e73.png")
         await message.answer_photo(
             photo=photo,
             caption="<b>🎮 Бот для поиска цен игр, гайдов Steam и т.п</b>\n<i>Разработка ботов под ваши цели -- @yangspays</i>",
@@ -331,8 +331,8 @@ async def universal_handler(message: types.Message):
     steam_input = message.text.strip()
     
     if steam_input.isdigit() and len(steam_input) > 10:
-        await message.answer("🔍 Начинаю поиск")
         try:
+            await message.answer("🔍 Начинаю поиск")
             url = f'https://steamcommunity.com/profiles/{steam_input}/?xml=1'
             r = requests.get(url, timeout=5)
             
@@ -341,6 +341,7 @@ async def universal_handler(message: types.Message):
                 
                 if soup.find('error'):
                     await message.answer("❌ Нечего не найдено возможно у пользователя закрыт профиль")
+                    await message.answer("Что-то еще?", reply_markup=main_keyboard)
                     return
                 
                 steamID = soup.find('steamID').text if soup.find('steamID') else "Неизвестно"
@@ -361,11 +362,14 @@ async def universal_handler(message: types.Message):
             else:
                 await message.answer("❌ Не удалось получить данные")
         except:
-            await message.answer("❌ Не удалось получить данные")
+            await message.answer("❌ Произошла ошибка при поиске профиля")
     else:
-        await message.answer("🔍 Ищу")
-        price_info = await get_game_price(message.text)
-        await message.answer(price_info, parse_mode=ParseMode.HTML)
+        try:
+            await message.answer("🔍 Ищу")
+            price_info = await get_game_price(message.text)
+            await message.answer(price_info, parse_mode=ParseMode.HTML)
+        except:
+            await message.answer("❌ Произошла ошибка при поиске игры")
     
     await message.answer("Что-то еще?", reply_markup=main_keyboard)
 

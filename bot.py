@@ -32,8 +32,7 @@ class Data:
     async def add_user(self, user_id, username, first_name):
         async with aiosqlite.connect(self.db_name) as db:
             await db.execute(
-                '''INSERT OR IGNORE INTO users (user_id, username, first_name)
-                VALUES (?, ?, ?)''',
+                '''INSERT OR IGNORE INTO users (user_id, username, first_name) VALUES (?, ?, ?)''',
                 (user_id, username, first_name)
             )
             await db.commit()
@@ -67,62 +66,48 @@ guides_keyboard = ReplyKeyboardMarkup(
 )
 
 async def get_top_online_games():
-    url = "https://steamcharts.com/top"
-    response = requests.get(url)
-    soup = BeautifulSoup(response.text, 'html.parser')
-    
-    table = soup.find('table', id='top-games')
-    if not table:
-        return "error code 001 Сообщите разработчику бота"
-    
-    tbody = table.find('tbody')
-    if not tbody:
-        return "error code 002 сообщите разработчику бота"
-    
-    rows = tbody.find_all('tr')[:10]
-    top_list = ["🏆 <b>Топ игр по онлайну</b>"]
-    
-    for idx, row in enumerate(rows, 1):
-        name_cell = row.find('td', class_='game-name')
-        if name_cell:
-            name_link = name_cell.find('a')
-            name = name_link.text.strip() if name_link else "Неизвестно"
-        else:
-            name = "Неизвестно"
+    try:
+        url = "https://steamcharts.com/top"
+        r = requests.get(url)
+        soup = BeautifulSoup(r.text, 'html.parser')
         
-        players_cell = row.find('td', class_='num')
-        players = players_cell.text.strip() if players_cell else "0"
+        rows = soup.find('table', id='top-games').find('tbody').find_all('tr')[:10]
+        top_list = ["🏆 <b>Топ игр по онлайну</b>"]
         
-        top_list.append(f"{idx}. <b>{name}</b> — {players} игроков")
-    return "\n".join(top_list)
+        for i, row in enumerate(rows, 1):
+            name = row.find('td', class_='game-name').find('a').text.strip()
+            players = row.find('td', class_='num').text.strip()
+            top_list.append(f"{i}. <b>{name}</b> — {players} игроков")
+        
+        return "\n".join(top_list)
+    except:
+        return "Ошибка при получении топа игр"
 
 async def get_game_price(game_name):
     try:
         search = requests.get(
             "https://store.steampowered.com/api/storesearch",
-            params={'term': game_name, 'cc': 'ru'},
-            timeout=10
+            params={'term': game_name, 'cc': 'ru'}
         ).json()
         
         if not search.get('items'):
-            return
+            return "Игра не найдена"
         
         game = search['items'][0]
         game_id = game['id']
-        game_name_display = game.get('name', 'Неизвестно')
-        result = []
+        game_name_display = game.get('name', game_name)
         
+        prices = []
         for cc, symbol in [('ru', '₽'), ('us', '$'), ('kz', '₸')]:
             details = requests.get(
                 "https://store.steampowered.com/api/appdetails",
-                params={'appids': game_id, 'cc': cc, 'l': 'russian'},
-                timeout=10
+                params={'appids': game_id, 'cc': cc}
             ).json()
             
             if details.get(str(game_id), {}).get('success'):
                 data = details[str(game_id)]['data']
                 if data.get('is_free'):
-                    price = "Игра бесплатная"
+                    price = "Бесплатно"
                 elif data.get('price_overview'):
                     p = data['price_overview']
                     price = f"{p['final_formatted']}"
@@ -130,16 +115,13 @@ async def get_game_price(game_name):
                         price += f" (-{p['discount_percent']}%)"
                 else:
                     price = "Цена не указана"
-                result.append(f"{symbol} {price}")
+                prices.append(f"{symbol} {price}")
             else:
-                result.append(f"{symbol} Недоступно")
+                prices.append(f"{symbol} Недоступно")
         
-        if not result:
-            return f"🎮 {game_name_display}\n\nЦены не найдены"
-        
-        return f"🎮 <b>{game_name_display}</b>\n\n" + "\n".join(result)
-    except Exception as e:
-        return f"Произошла ошибка при поиске игры: {str(e)}"
+        return f"🎮 <b>{game_name_display}</b>\n\n" + "\n".join(prices)
+    except:
+        return "Ошибка при поиске цены"
 
 @dp.message(Command("start"))
 async def start_handler(message: types.Message):
@@ -343,20 +325,19 @@ async def universal_handler(message: types.Message):
                 "💎 Cпособы повышение lvla Steam", "💎 Смена региона Steam", "🔙 Назад в меню",
                 "Топ игр по онлайну", "Статистика аккаунта Steam"]
     
-    if message.text.startswith('/') or message.text in excluded:
+    if message.text in excluded or message.text.startswith('/'):
         return
     
     steam_input = message.text.strip()
     
     if steam_input.isdigit() and len(steam_input) > 10:
         await message.answer("🔍 Начинаю поиск")
-        
         try:
             url = f'https://steamcommunity.com/profiles/{steam_input}/?xml=1'
-            response = requests.get(url, timeout=5)
+            r = requests.get(url, timeout=5)
             
-            if response.status_code == 200:
-                soup = BeautifulSoup(response.text, 'xml')
+            if r.status_code == 200:
+                soup = BeautifulSoup(r.text, 'xml')
                 
                 if soup.find('error'):
                     await message.answer("❌ Нечего не найдено возможно у пользователя закрыт профиль")
@@ -379,11 +360,8 @@ async def universal_handler(message: types.Message):
                 await message.answer(result, parse_mode=ParseMode.HTML)
             else:
                 await message.answer("❌ Не удалось получить данные")
-        
         except:
-            await message.answer("🔍 Ищу")
-            price_info = await get_game_price(message.text)
-            await message.answer(price_info, parse_mode=ParseMode.HTML)
+            await message.answer("❌ Не удалось получить данные")
     else:
         await message.answer("🔍 Ищу")
         price_info = await get_game_price(message.text)
@@ -395,27 +373,31 @@ async def mailing():
     while True:
         try:
             await asyncio.sleep(10000)
+            
             user_ids = await db.get_all_users()
+            if not user_ids:
+                continue
             
             for user_id in user_ids:
-                async with aiosqlite.connect(db.db_name) as db_conn:
-                    cursor = await db_conn.execute('SELECT first_name FROM users WHERE user_id = ?', (user_id,))
-                    user_data = await cursor.fetchone()
-                
-                if user_data:
-                    first_name = user_data[0] or "друн"
-                    text = [
-                        f'<b>⚡ Йоу, {first_name}! А что если твоя любимая игра подорожала? Напиши команду /start, выбери первую кнопку и проверь это!</b>',
-                        f'<b>⚡ Эй, {first_name}! А ты повысил свой лвл Steam? Если нет, то скорее пиши /start, выбирай вторую кнопку и повышай лвл!</b>',
-                        f'<b>⚡ Привет, {first_name}! Ты уже видел свежий топ по онлайну в играх? Скорее беги смотреть командой /start, выбирай третью кнопку и смотри!</b>',
-                        f'<b>⚡Ку, {first_name} в боте вышло обновление советую протестировать новую функцию поиска информации по Steam ID</b>'
-                    ]
-                    reminder_text = random.choice(text)
-                    try:
+                try:
+                    async with aiosqlite.connect(db.db_name) as db_conn:
+                        cursor = await db_conn.execute('SELECT first_name FROM users WHERE user_id = ?', (user_id,))
+                        user_data = await cursor.fetchone()
+                    
+                    if user_data:
+                        first_name = user_data[0] or "друн"
+                        text = [
+                            f'<b>⚡ Йоу, {first_name}! А что если твоя любимая игра подорожала? Напиши команду /start, выбери первую кнопку и проверь это!</b>',
+                            f'<b>⚡ Эй, {first_name}! А ты повысил свой лвл Steam? Если нет, то скорее пиши /start, выбирай вторую кнопку и повышай лвл!</b>',
+                            f'<b>⚡ Привет, {first_name}! Ты уже видел свежий топ по онлайну в играх? Скорее беги смотреть командой /start, выбирай третью кнопку и смотри!</b>',
+                            f'<b>⚡Ку, {first_name} в боте вышло обновление советую протестировать новую функцию поиска информации по Steam ID</b>'
+                        ]
+                        reminder_text = random.choice(text)
                         await bot.send_message(user_id, reminder_text, parse_mode=ParseMode.HTML)
-                    except:
-                        continue
-        except Exception as e:
+                        await asyncio.sleep(0.5)
+                except:
+                    continue
+        except:
             await asyncio.sleep(60)
 
 async def main():

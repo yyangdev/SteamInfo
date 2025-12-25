@@ -73,14 +73,14 @@ async def get_top_online_games():
     
     table = soup.find('table', id='top-games')
     if not table:
-        return "Не удалось получить данные о топе игр"
+        return "error code 001 Сообщите разработчику бота"
     
     tbody = table.find('tbody')
     if not tbody:
-        return "Не удалось получить данные о топе игр"
+        return "error code 002 сообщите разработчику бота"
     
     rows = tbody.find_all('tr')[:10]
-    top_list = ["🏆 <b>Топ игр по онлайну прямо сейчас</b>"]
+    top_list = ["🏆 <b>Топ игр по онлайну</b>"]
     
     for idx, row in enumerate(rows, 1):
         name_cell = row.find('td', class_='game-name')
@@ -105,7 +105,7 @@ async def get_game_price(game_name):
         ).json()
         
         if not search.get('items'):
-            return "Игра не найдена"
+            return
         
         game = search['items'][0]
         game_id = game['id']
@@ -180,7 +180,7 @@ async def badges_menu_handler(message: types.Message):
 
 @dp.message(lambda message: message.text == "Статистика аккаунта Steam")
 async def ask_steam_info_handler(message: types.Message):
-    await message.answer("<b>Уже совсем скоро...</b>", parse_mode=ParseMode.HTML)
+    await message.answer("Введите Steam ID:")
 
 @dp.message(lambda message: message.text == "💎 Игры для значка Коллекционера")
 async def collector_badge_handler(message: types.Message):
@@ -346,15 +346,55 @@ async def universal_handler(message: types.Message):
     if message.text.startswith('/') or message.text in excluded:
         return
     
-    await message.answer("🔍 Идет обработка...")
-    price_info = await get_game_price(message.text)
-    await message.answer(price_info, parse_mode=ParseMode.HTML)
+    steam_input = message.text.strip()
+    
+    if steam_input.isdigit() and len(steam_input) > 10:
+        await message.answer("🔍 Начинаю поиск")
+        
+        try:
+            url = f'https://steamcommunity.com/profiles/{steam_input}/?xml=1'
+            response = requests.get(url, timeout=5)
+            
+            if response.status_code == 200:
+                soup = BeautifulSoup(response.text, 'xml')
+                
+                if soup.find('error'):
+                    await message.answer("❌ Нечего не найдено возможно у пользователя закрыт профиль")
+                    return
+                
+                steamID = soup.find('steamID').text if soup.find('steamID') else "Неизвестно"
+                state = soup.find('stateMessage').text if soup.find('stateMessage') else "Неизвестно"
+                vac = soup.find('vacBanned').text if soup.find('vacBanned') else "0"
+                date = soup.find('memberSince').text if soup.find('memberSince') else "Неизвестно"
+                
+                vac_text = "Нет банов" if vac == "0" else "Есть баны"
+                
+                result = f"""
+<b>📊 Статистика Steam:</b>
+👤 Nickname: {steamID}
+🔄 Cтатус: {state}
+⚠️ VAC: {vac_text}
+📅 Дата регистрации: {date}
+"""
+                await message.answer(result, parse_mode=ParseMode.HTML)
+            else:
+                await message.answer("❌ Не удалось получить данные")
+        
+        except:
+            await message.answer("🔍 Ищу")
+            price_info = await get_game_price(message.text)
+            await message.answer(price_info, parse_mode=ParseMode.HTML)
+    else:
+        await message.answer("🔍 Ищу")
+        price_info = await get_game_price(message.text)
+        await message.answer(price_info, parse_mode=ParseMode.HTML)
+    
     await message.answer("Что-то еще?", reply_markup=main_keyboard)
 
 async def mailing():
     while True:
-        await asyncio.sleep(10000)  # 5 минут
         try:
+            await asyncio.sleep(10000)
             user_ids = await db.get_all_users()
             
             for user_id in user_ids:
@@ -363,11 +403,12 @@ async def mailing():
                     user_data = await cursor.fetchone()
                 
                 if user_data:
-                    first_name = user_data[0] or "друг"
+                    first_name = user_data[0] or "друн"
                     text = [
                         f'<b>⚡ Йоу, {first_name}! А что если твоя любимая игра подорожала? Напиши команду /start, выбери первую кнопку и проверь это!</b>',
                         f'<b>⚡ Эй, {first_name}! А ты повысил свой лвл Steam? Если нет, то скорее пиши /start, выбирай вторую кнопку и повышай лвл!</b>',
-                        f'<b>⚡ Привет, {first_name}! Ты уже видел свежий топ по онлайну в играх? Скорее беги смотреть командой /start, выбирай третью кнопку и смотри!</b>'
+                        f'<b>⚡ Привет, {first_name}! Ты уже видел свежий топ по онлайну в играх? Скорее беги смотреть командой /start, выбирай третью кнопку и смотри!</b>',
+                        f'<b>⚡Ку, {first_name} в боте вышло обновление советую протестировать новую функцию поиска информации по Steam ID</b>'
                     ]
                     reminder_text = random.choice(text)
                     try:
@@ -375,7 +416,6 @@ async def mailing():
                     except:
                         continue
         except Exception as e:
-            print(f"Ошибка в рассылке: {e}")
             await asyncio.sleep(60)
 
 async def main():

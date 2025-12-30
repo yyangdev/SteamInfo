@@ -7,6 +7,7 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, FSInputFile
 from aiogram.enums import ParseMode
+from datetime import datetime
 
 TOKEN = "8485275877:AAHhcEyFnivmc_b2cyHiTtsmAY_aCr6kUJg"
 
@@ -123,6 +124,60 @@ async def get_game_price(game_name):
     except:
         return "Ошибка при поиске цены"
 
+async def get_steam_stats(steam_id):
+    try:
+        key = "3E5510977DF73F2C242FF7D960B48EBA"
+        base = "http://api.steampowered.com"
+        
+        urls = {
+            'summary': f"{base}/ISteamUser/GetPlayerSummaries/v2/?key={key}&steamids={steam_id}",
+            'games': f"{base}/IPlayerService/GetOwnedGames/v1/?key={key}&steamid={steam_id}&include_appinfo=1",
+            'bans': f"{base}/ISteamUser/GetPlayerBans/v1/?key={key}&steamids={steam_id}",
+            'level': f"{base}/IPlayerService/GetSteamLevel/v1/?key={key}&steamid={steam_id}",
+        }
+        
+        data = {}
+        for name, url in urls.items():
+            data[name] = requests.get(url).json()
+        
+        profile = data['summary']['response']['players'][0]
+        games = data['games']['response']['games'] if 'games' in data['games']['response'] else []
+        bans = data['bans']['players'][0]
+        level = data['level']['response']['player_level']
+        
+        total_hours = sum(g['playtime_forever'] for g in games) // 60 if games else 0
+        top_games = sorted(games, key=lambda x: x['playtime_forever'], reverse=True)[:3] if games else []
+        
+        created = datetime.fromtimestamp(profile.get('timecreated', 0)).strftime('%d.%m.%Y') if profile.get('timecreated') else 'N/A'
+        status = {0:'⚫ Offline',1:'🟢 Online',2:'🔴 Busy',3:'🟡 Away',4:'💤 Snooze',5:'💬 Trade',6:'🎮 Play'}.get(profile.get('personastate',0),'⚫ Offline')
+        
+        result = f"""
+👤 <b>{profile.get('personaname', 'N/A')}</b>
+{status}
+"""
+        if profile.get('realname'):
+            result += f"📝 {profile.get('realname')}\n"
+        
+        result += f"""
+Lvl Steam: <b>{level}</b>
+Игр на аккаунте: <b>{data['games']['response'].get('game_count', 0)}</b>
+Часы проведенные в играх: <b>{total_hours}</b>
+Vac Баннов: <b>{bans.get('NumberOfVACBans', 0)}</b> | Игровых банов: <b>{bans.get('NumberOfGameBans', 0)}</b>
+📅 Создан: <b>{created}</b>
+"""
+        if profile.get('loccountrycode'):
+            result += f"Страна: <b>{profile.get('loccountrycode')}</b>\n"
+        
+        if top_games:
+            result += "\nТоп игры:\n"
+            for game in top_games:
+                hours = game['playtime_forever'] // 60
+                result += f"  • {game.get('name', '?')} (<b>{hours}ч</b>)\n"
+        
+        return result
+    except:
+        return "❌ Ошибка при получении статистики"
+
 @dp.message(Command("start"))
 async def start_handler(message: types.Message):
     await db.add_user(
@@ -162,7 +217,7 @@ async def badges_menu_handler(message: types.Message):
 
 @dp.message(lambda message: message.text == "Статистика аккаунта Steam")
 async def ask_steam_info_handler(message: types.Message):
-    await message.answer("Введите Steam ID:")
+    await message.answer("Введите Steam ID:", reply_markup=types.ReplyKeyboardRemove())
 
 @dp.message(lambda message: message.text == "💎 Игры для значка Коллекционера")
 async def collector_badge_handler(message: types.Message):
@@ -331,78 +386,30 @@ async def universal_handler(message: types.Message):
     steam_input = message.text.strip()
     
     if steam_input.isdigit() and len(steam_input) > 10:
-        try:
-            await message.answer("🔍 Начинаю поиск")
-            url = f'https://steamcommunity.com/profiles/{steam_input}/?xml=1'
-            r = requests.get(url, timeout=5)
-            
-            if r.status_code == 200:
-                soup = BeautifulSoup(r.text, 'xml')
-                
-                if soup.find('error'):
-                    await message.answer("❌ Нечего не найдено возможно у пользователя закрыт профиль")
-                    await message.answer("Что-то еще?", reply_markup=main_keyboard)
-                    return
-                
-                steamID = soup.find('steamID').text if soup.find('steamID') else "Неизвестно"
-                state = soup.find('stateMessage').text if soup.find('stateMessage') else "Неизвестно"
-                vac = soup.find('vacBanned').text if soup.find('vacBanned') else "0"
-                date = soup.find('memberSince').text if soup.find('memberSince') else "Неизвестно"
-                
-                vac_text = "Нет банов" if vac == "0" else "Есть баны"
-                
-                result = f"""
-<b>📊 Статистика Steam:</b>
-👤 Nickname: {steamID}
-🔄 Cтатус: {state}
-⚠️ VAC: {vac_text}
-📅 Дата регистрации: {date}
-"""
-                await message.answer(result, parse_mode=ParseMode.HTML)
-            else:
-                await message.answer("❌ Не удалось получить данные")
-        except:
-            await message.answer("❌ Произошла ошибка при поиске профиля")
+        await message.answer("🔍 Загружаю статистику...")
+        stats = await get_steam_stats(steam_input)
+        await message.answer(stats, parse_mode=ParseMode.HTML)
     else:
-        try:
-            await message.answer("🔍 Ищу")
-            price_info = await get_game_price(message.text)
-            await message.answer(price_info, parse_mode=ParseMode.HTML)
-        except:
-            await message.answer("❌ Произошла ошибка при поиске игры")
+        await message.answer("🔍 Ищу игру...")
+        price_info = await get_game_price(message.text)
+        await message.answer(price_info, parse_mode=ParseMode.HTML)
     
     await message.answer("Что-то еще?", reply_markup=main_keyboard)
 
 async def mailing():
     while True:
-        try:
-            await asyncio.sleep(10000)
-            
-            user_ids = await db.get_all_users()
-            if not user_ids:
-                continue
-            
-            for user_id in user_ids:
-                try:
-                    async with aiosqlite.connect(db.db_name) as db_conn:
-                        cursor = await db_conn.execute('SELECT first_name FROM users WHERE user_id = ?', (user_id,))
-                        user_data = await cursor.fetchone()
-                    
-                    if user_data:
-                        first_name = user_data[0] or "друн"
-                        text = [
-                            f'<b>⚡ Йоу, {first_name}! А что если твоя любимая игра подорожала? Напиши команду /start, выбери первую кнопку и проверь это!</b>',
-                            f'<b>⚡ Эй, {first_name}! А ты повысил свой лвл Steam? Если нет, то скорее пиши /start, выбирай вторую кнопку и повышай лвл!</b>',
-                            f'<b>⚡ Привет, {first_name}! Ты уже видел свежий топ по онлайну в играх? Скорее беги смотреть командой /start, выбирай третью кнопку и смотри!</b>',
-                            f'<b>⚡Ку, {first_name} в боте вышло обновление советую протестировать новую функцию поиска информации по Steam ID</b>'
-                        ]
-                        reminder_text = random.choice(text)
-                        await bot.send_message(user_id, reminder_text, parse_mode=ParseMode.HTML)
-                        await asyncio.sleep(0.5)
-                except:
-                    continue
-        except:
-            await asyncio.sleep(60)
+        await asyncio.sleep(86400)
+        for user_id in await db.get_all_users():
+            try:
+                text = random.choice([
+                    '<b>⚡ Йоу! А что если твоя любимая игра подорожала? Проверь это!</b>',
+                    '<b>⚡ Эй! А ты повысил свой лвл Steam? Если нет, то скорее делай это!</b>',
+                    '<b>⚡ Привет! Ты уже видел свежий топ по онлайну в играх?</b>',
+                    '<b>⚡ Ку! В боте вышло обновление!</b>'
+                ])
+                await bot.send_message(user_id, text, parse_mode=ParseMode.HTML)
+            except:
+                pass
 
 async def main():
     await db.initdb()
